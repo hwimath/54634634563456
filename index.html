@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>휘매쓰 연산 챌린지!</title>
+  <style>
+    body {
+      margin: 0; padding: 0;
+      font-family: sans-serif;
+      background: linear-gradient(to bottom right, #cceeff, #ffffff);
+      color: #333;
+    }
+    h1, h2, h3 {
+      text-align: center;
+      margin: 10px;
+    }
+    #gameContainer {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 10px;
+      text-align: center;
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    }
+    .hidden {
+      display: none;
+    }
+    button {
+      padding: 8px 16px;
+      margin: 6px;
+      font-size: 1rem;
+      cursor: pointer;
+      border: none;
+      border-radius: 6px;
+      background-color: #007BFF;
+      color: white;
+    }
+    button:hover {
+      background-color: #0056b3;
+    }
+    #energyBarContainer {
+      width: 60%;
+      height: 20px;
+      background-color: #ddd;
+      margin: 10px auto;
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: inset 0 0 5px rgba(0,0,0,0.2);
+    }
+    #energyBar {
+      height: 100%;
+      width: 100%;
+      background-color: #28a745;
+      transition: width 0.2s linear;
+    }
+    #totalTimeDisplay {
+      font-size: 0.9rem; 
+      color: #555;
+      margin-bottom: 5px;
+    }
+    #chanceDisplay {
+      font-weight: bold;
+      color: #c33;
+    }
+    canvas {
+      border: 1px solid #999;
+      margin: 10px auto;
+      display: block;
+      background-color: #fafafa;
+    }
+    #questionText {
+      font-size: 1.2rem;
+      margin: 10px;
+    }
+    #answerInput {
+      font-size: 1rem;
+      padding: 5px;
+      width: 120px;
+      text-align: center;
+    }
+    #scoreDisplay {
+      font-weight: bold;
+      color: #006400;
+    }
+    .difficultyBtn {
+      font-size: 1.2rem;
+      background-color: #ff9966;
+    }
+  </style>
+</head>
+<body>
+
+<div id="gameContainer">
+  <h1>휘매쓰 연산 챌린지!</h1>
+  
+  <!-- 난이도 선택 화면 -->
+  <div id="difficultyScreen">
+    <h3>난이도를 선택하세요</h3>
+    <button class="difficultyBtn" onclick="selectDifficulty('최상')">최상 (20초, 문제당 20점)</button>
+    <button class="difficultyBtn" onclick="selectDifficulty('상')">상 (30초, 문제당 15점)</button>
+    <button class="difficultyBtn" onclick="selectDifficulty('중')">중 (40초, 문제당 13점)</button>
+    <button class="difficultyBtn" onclick="selectDifficulty('하')">하 (시간 제한 없음, 문제당 10점)</button>
+  </div>
+  
+  <!-- 실제 게임화면 -->
+  <div id="gameScreen" class="hidden">
+    <h2 id="scoreDisplay">점수: 0</h2>
+    <div id="totalTimeDisplay">전체 진행 시간: 0초</div>
+    <div id="chanceDisplay">남은 기회: 3</div>
+    
+    <!-- 에너지바(시간 제한용) -->
+    <div id="energyBarContainer" class="hidden">
+      <div id="energyBar"></div>
+    </div>
+    
+    <h3 id="questionText"></h3>
+    <!-- 수직선 표시용 canvas -->
+    <canvas id="numberLineCanvas" width="400" height="100"></canvas>
+    
+    <input type="text" id="answerInput" placeholder="답을 입력" />
+    <br />
+    <button onclick="submitAnswer()">제출</button>
+    
+    <div id="feedback"></div>
+  </div>
+  
+  <!-- 게임오버 화면 -->
+  <div id="gameOverScreen" class="hidden">
+    <h2>게임 종료!</h2>
+    <p id="finalScore"></p>
+    <button onclick="location.reload()">다시 시작하기</button>
+  </div>
+</div>
+
+<script>
+/*
+  핵심 내용:
+   - 한 칸 크기(step)가 0.1/0.01/0.001인 경우를 랜덤으로 골라,
+     rangeStart, rangeEnd, arrow를 모두 그 step 단위에 맞춰서 생성.
+   - 표시는 소수점 자릿수(0.1->1자리, 0.01->2자리, 0.001->3자리)로 정확히.
+   - 50문제 생성 후 셔플, 소진 후 무한랜덤, 게임 로직은 기존 그대로.
+*/
+
+// 1) 문제 자동 생성
+let questions = [];
+generateQuestions(50);
+
+let shuffledQuestions = [];
+let currentIndex = 0;
+let currentQuestion;
+let score = 0;
+let chance = 3;
+let totalTime = 0;
+let totalTimeInterval;
+let energyInterval;
+let energyTime;
+let maxEnergyTime;
+let difficulty;
+let questionPoint;
+
+/** 문제 50개 생성. 한 칸(step)을 0.1/0.01/0.001 중 하나로.  */
+function generateQuestions(num){
+  const stepSizes = [0.1, 0.01, 0.001];
+  
+  for(let i=0; i<num; i++){
+    // 1) step 선택
+    let step = stepSizes[Math.floor(Math.random() * stepSizes.length)];
+    
+    // 소수 자릿수 (0.1->1, 0.01->2, 0.001->3)
+    let decimalPlaces = getDecimalPlaces(step);
+    
+    // 2) rangeStart를 step 간격에 맞춰 생성.
+    //    예: step=0.01 → 0~300 사이 정수 중 랜덤 -> /100 => 0~3.xx
+    let maxVal = 3;  // 최대 3까지만(너무 커지지 않도록)
+    let totalSteps = Math.floor(maxVal / step); // (예) step=0.01 => 3/0.01=300
+    // 랜덤 정수 하나 고르고 step 곱
+    let randInt = Math.floor(Math.random() * (totalSteps+1));
+    let rangeStart = randInt * step;  
+    rangeStart = parseFloat(rangeStart.toFixed(decimalPlaces));
+    
+    // 3) rangeEnd = rangeStart + step*10
+    let rangeEnd = rangeStart + step*10;
+    rangeEnd = parseFloat(rangeEnd.toFixed(decimalPlaces));
+    
+    // 혹시 rangeEnd > 10 초과하면 조정
+    if(rangeEnd > 10){
+      rangeEnd = 10;
+      // rangeStart도 재조정
+      rangeStart = parseFloat((rangeEnd - step*10).toFixed(decimalPlaces));
+    }
+    
+    // 4) 화살표 = rangeStart + (1~9 중 랜덤)×step
+    let arrowIndex = Math.floor(Math.random()*9)+1; // 1..9
+    let arrow = rangeStart + step*arrowIndex;
+    // 혹시 arrow > rangeEnd ? 조정
+    if(arrow > rangeEnd) arrow = rangeEnd;
+    arrow = parseFloat(arrow.toFixed(decimalPlaces));
+    
+    // 5) 문제 push
+    questions.push({
+      rangeStart: rangeStart,
+      rangeEnd: rangeEnd,
+      arrow: arrow,
+      answer: arrow.toString(),
+      step: step  // (추가) 수직선 표시 시에도 사용
+    });
+  }
+}
+
+/** step(칸 간격)에 따른 소수점 자릿수 판단 */
+function getDecimalPlaces(step){
+  if(step===0.1) return 1;
+  if(step===0.01) return 2;
+  if(step===0.001) return 3;
+  return 2; // 기본
+}
+
+/** 난이도 선택 */
+function selectDifficulty(diff) {
+  difficulty = diff;
+  switch(diff) {
+    case '최상':
+      maxEnergyTime = 20;
+      questionPoint = 20;
+      break;
+    case '상':
+      maxEnergyTime = 30;
+      questionPoint = 15;
+      break;
+    case '중':
+      maxEnergyTime = 40;
+      questionPoint = 13;
+      break;
+    case '하':
+      maxEnergyTime = -1; // 시간제한 없음
+      questionPoint = 10;
+      break;
+  }
+  
+  document.getElementById('difficultyScreen').classList.add('hidden');
+  document.getElementById('gameScreen').classList.remove('hidden');
+  
+  totalTimeInterval = setInterval(()=>{
+    totalTime++;
+    document.getElementById('totalTimeDisplay').textContent = "전체 진행 시간: " + totalTime + "초";
+  },1000);
+  
+  startGame();
+}
+
+function startGame(){
+  score = 0;
+  chance = 3;
+  currentIndex = 0;
+  
+  // 50문제 셔플
+  shuffledQuestions = shuffleArray(questions.slice());
+  
+  document.getElementById('scoreDisplay').textContent = "점수: 0";
+  document.getElementById('chanceDisplay').textContent = "남은 기회: 3";
+  
+  nextQuestion();
+}
+
+/** 무작위 섞기 */
+function shuffleArray(arr){
+  for(let i=arr.length-1; i>0; i--){
+    const j = Math.floor(Math.random() * (i+1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+/** 다음 문제 */
+function nextQuestion(){
+  // 50문제 소진 후 무한랜덤
+  if(currentIndex < shuffledQuestions.length){
+    currentQuestion = shuffledQuestions[currentIndex];
+    currentIndex++;
+  } else {
+    currentQuestion = questions[Math.floor(Math.random() * questions.length)];
+  }
+
+  document.getElementById('answerInput').value = "";
+  document.getElementById('questionText').textContent = 
+    "수직선( " + currentQuestion.rangeStart + " ~ " + currentQuestion.rangeEnd +
+    " )에서 화살표가 가리키는 소수를 구하세요!";
+  document.getElementById('feedback').textContent = "";
+  
+  drawNumberLine(currentQuestion);
+  setupEnergyBar();
+}
+
+/** 수직선 표시 */
+function drawNumberLine(q){
+  let canvas = document.getElementById('numberLineCanvas');
+  let ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
+  let marginLeft = 40;
+  let marginRight = 40;
+  let lineY = 50;
+  let availableWidth = canvas.width - marginLeft - marginRight;
+  
+  // 수직선
+  ctx.beginPath();
+  ctx.moveTo(marginLeft, lineY);
+  ctx.lineTo(canvas.width - marginRight, lineY);
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  
+  // 10등분
+  let range = q.rangeEnd - q.rangeStart;
+  let step = range / 10;
+  
+  // step이 0.1, 0.01, 0.001이면 표시 자릿수 결정
+  let decimalPlaces = getDecimalPlaces(q.step);
+  
+  for(let i=0; i<=10; i++){
+    let val = q.rangeStart + step*i;
+    val = parseFloat(val.toFixed(decimalPlaces));
+    
+    let x = marginLeft + (availableWidth)*(i/10);
+    
+    // tick
+    ctx.beginPath();
+    ctx.moveTo(x, lineY - 5);
+    ctx.lineTo(x, lineY + 5);
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    
+    // i=0, 5, 10만 표시(혹은 원하시면 모두 표시 가능)
+    if(i===0 || i===5 || i===10){
+      ctx.font = '12px sans-serif';
+      ctx.fillStyle = '#333';
+      ctx.fillText(val.toString(), x - 12, lineY + 20);
+    }
+  }
+  
+  // 화살표
+  let arrowPos = (q.arrow - q.rangeStart) / range; 
+  let arrowX = marginLeft + availableWidth * arrowPos;
+  
+  ctx.beginPath();
+  ctx.moveTo(arrowX, lineY - 15);
+  ctx.lineTo(arrowX - 5, lineY - 5);
+  ctx.lineTo(arrowX + 5, lineY - 5);
+  ctx.closePath();
+  ctx.fillStyle = 'red';
+  ctx.fill();
+}
+
+/** 난이도별 에너지바 */
+function setupEnergyBar(){
+  if(difficulty === '하'){
+    document.getElementById('energyBarContainer').classList.add('hidden');
+    return;
+  }
+  document.getElementById('energyBarContainer').classList.remove('hidden');
+  
+  energyTime = maxEnergyTime;
+  updateEnergyBar();
+  clearInterval(energyInterval);
+  energyInterval = setInterval(()=>{
+    energyTime -= 0.2;
+    if(energyTime <= 0){
+      clearInterval(energyInterval);
+      timeOverHandler();
+    } else {
+      updateEnergyBar();
+    }
+  }, 200);
+}
+
+function updateEnergyBar(){
+  let percent = (energyTime / maxEnergyTime) * 100;
+  document.getElementById('energyBar').style.width = percent + "%";
+}
+
+/** 시간초과 */
+function timeOverHandler(){
+  chance--;
+  document.getElementById('chanceDisplay').textContent = "남은 기회: " + chance;
+  document.getElementById('feedback').textContent = 
+    "시간초과! 정답은 " + currentQuestion.answer + " 이었습니다.";
+  
+  if(chance <= 0){
+    endGame();
+    return;
+  }
+  setTimeout(nextQuestion, 1500);
+}
+
+/** 정답 제출 */
+function submitAnswer(){
+  if(difficulty !== '하'){
+    clearInterval(energyInterval);
+  }
+  
+  let userAns = document.getElementById('answerInput').value.trim();
+  if(!userAns){
+    document.getElementById('feedback').textContent = "답을 입력하세요!";
+    if(difficulty !== '하') setupEnergyBar();
+    return;
+  }
+  
+  if(userAns === currentQuestion.answer){
+    score += questionPoint;
+    document.getElementById('scoreDisplay').textContent = "점수: " + score;
+    document.getElementById('feedback').textContent = 
+      "정답입니다! +" + questionPoint + "점 획득!";
+    setTimeout(nextQuestion, 1000);
+  } else {
+    chance--;
+    document.getElementById('chanceDisplay').textContent = "남은 기회: " + chance;
+    document.getElementById('feedback').textContent = 
+      "오답입니다! 정답은 " + currentQuestion.answer + " 입니다.";
+    
+    if(chance <= 0){
+      setTimeout(endGame, 1500);
+    } else {
+      setTimeout(nextQuestion, 1500);
+    }
+  }
+}
+
+/** 게임 종료 */
+function endGame(){
+  clearInterval(totalTimeInterval);
+  clearInterval(energyInterval);
+  document.getElementById('gameScreen').classList.add('hidden');
+  document.getElementById('gameOverScreen').classList.remove('hidden');
+  document.getElementById('finalScore').textContent = 
+    "최종 점수: " + score + "점 / 총 걸린 시간: " + totalTime + "초";
+}
+</script>
+</body>
+</html>
